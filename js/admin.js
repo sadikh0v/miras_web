@@ -7,12 +7,17 @@
   const DRAFT_KEY = 'miras.admin.draft.v1';
   const CFG_KEY = 'miras.admin.github.v1';
   const TOKEN_KEY = 'miras.admin.token.v1';
+  const PENDING_KEY = 'miras.admin.photos.v1';
+  const MAX_SIDE = 1200;
+  const PHOTO_PATH = /^img\/products\/[\w.-]+\.(webp|jpg)$/;
 
   let state = { categories: [], collections: [], products: [] };
   let dirty = false;
   let editingId = null;
   let formCols = new Set();
   const openCols = new Set();
+  let pending = {};          // path -> dataURL: загруженные фото, которые уйдут в репозиторий при Publish
+  const uploaded = new Set(); // уже опубликованные в этой сессии (повторно не отправляем)
   let toastTimer;
 
   /* ---------- helpers ---------- */
@@ -59,7 +64,7 @@
 
   function thumb(product) {
     const img = h('img', { alt: '', loading: 'lazy', width: '56', height: '70' });
-    img.src = imageSrc(product.image, '../') || '../img/placeholder.svg';
+    img.src = pending[product.image] || imageSrc(product.image, '../') || '../img/placeholder.svg';
     img.addEventListener('error', () => { img.src = '../img/placeholder.svg'; }, { once: true });
     return img;
   }
@@ -76,6 +81,114 @@
     } catch { /* пустое поле — без предупреждения */ }
     return '';
   }
+
+  /* ---------- photos & Amazon paste ---------- */
+  function persistPending() {
+    const keep = Object.fromEntries(Object.entries(pending).filter(([path]) => !uploaded.has(path)));
+    try { localStorage.setItem(PENDING_KEY, JSON.stringify(keep)); } catch {
+      toast('Browser storage is full: publish soon, otherwise this photo is lost on reload.', true);
+    }
+  }
+
+  // Фото уменьшается до 1200 px и перекодируется в WebP: сайт остаётся быстрым, EXIF/GPS стираются.
+  async function compressImage(file) {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#F8F3E8'; // цвет паспарту: прозрачные PNG не станут чёрными
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    if (bitmap.close) bitmap.close();
+    let url = canvas.toDataURL('image/webp', 0.86);
+    if (!url.startsWith('data:image/webp')) url = canvas.toDataURL('image/jpeg', 0.88); // Safari без WebP-энкодера
+    return url;
+  }
+
+  function updatePreview() {
+    const value = $('#f-image').value.trim();
+    const src = pending[value] || imageSrc(value, '../');
+    const img = $('#preview');
+    if (!src) { img.hidden = true; img.removeAttribute('src'); return; }
+    img.hidden = false;
+    img.src = src;
+  }
+
+  async function handlePhoto(file) {
+    if (!file) return;
+    if (!/^image\/(jpeg|png|webp)$/.test(file.type)) { toast('Please choose a JPEG, PNG or WebP photo.', true); return; }
+    try {
+      const dataUrl = await compressImage(file);
+      const ext = dataUrl.startsWith('data:image/webp') ? 'webp' : 'jpg';
+      const path = `img/products/${Date.now().toString(36)}-${rid()}.${ext}`;
+      pending[path] = dataUrl;
+      persistPending();
+      $('#f-image').value = path;
+      updatePreview();
+    } catch {
+      toast('Could not read this image.', true);
+    }
+  }
+
+  const fixUrl = (v) => {
+    const t = String(v || '').trim();
+    return t.startsWith('//') ? `https:${t}` : t.replace(/^http:\/\//i, 'https://');
+  };
+
+  // Понимает: обычную ссылку (amazon.com/dp/…, amzn.to/…), SiteStripe «Text» (ссылка + название)
+  // и «Image» / «Text+Image» (ссылка + картинка), если они есть в вашем аккаунте.
+  // HTML разбирается DOMParser'ом: документ «мёртвый», скрипты и картинки не загружаются.
+  function parseAmazonPaste(raw) {
+    const out = { url: '', image: '', title: '' };
+    const text = String(raw || '').trim();
+    if (!text) return out;
+    if (!/[<>]/.test(text)) {
+      out.url = httpsUrl(fixUrl(text.split(/\s+/)[0])) || '';
+      return out;
+    }
+    const doc = new DOMParser().parseFromString(text, 'text/html');
+    const link = doc.querySelector('a[href]');
+    if (link) {
+      out.url = httpsUrl(fixUrl(link.getAttribute('href'))) || '';
+      out.title = (link.textContent || '').trim();
+    }
+    const img = [...doc.querySelectorAll('img[src]')].find((i) => {
+      const src = i.getAttribute('src');
+      return !/\/e\/ir\b|\bir-[a-z]+\.amazon-adsystem/i.test(src) && i.getAttribute('width') !== '1' && i.getAttribute('height') !== '1';
+    });
+    if (img) {
+      out.image = httpsUrl(fixUrl(img.getAttribute('src'))) || '';
+      if (!out.title) out.title = (img.getAttribute('alt') || '').trim();
+    }
+    out.title = out.title.slice(0, 120);
+    return out;
+  }
+
+  function applyPaste() {
+    const found = parseAmazonPaste($('#paste').value);
+    const f = $('#product-form').elements;
+    const status = $('#paste-status');
+    if (!found.url && !found.image) {
+      status.textContent = $('#paste').value.trim() ? 'Nothing recognised. Paste an Amazon link or the SiteStripe code.' : '';
+      return;
+    }
+    const parts = [];
+    if (found.url) { f.url.value = found.url; parts.push('link'); $('#form-warn').textContent = amazonLinkWarning(found.url); }
+    if (found.image) { f.image.value = found.image; parts.push('photo'); updatePreview(); }
+    if (found.title && !f.title.value.trim()) { f.title.value = found.title; parts.push('title'); }
+    status.textContent = `Filled in: ${parts.join(', ')}.${found.image ? '' : ' No photo in what you pasted. Upload one or paste an image link below.'}`;
+  }
+
+  $('#paste').addEventListener('input', applyPaste);
+  $('#f-image').addEventListener('input', updatePreview);
+  $('#photo-file').addEventListener('change', (e) => { const file = e.target.files[0]; e.target.value = ''; handlePhoto(file); });
+  const dropZone = $('#photo-drop');
+  dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('is-over'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('is-over'));
+  dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.classList.remove('is-over'); handlePhoto(e.dataTransfer?.files?.[0]); });
+  $('#preview').addEventListener('error', () => { $('#preview').hidden = true; });
 
   /* ---------- state ---------- */
   function persist() {
@@ -135,6 +248,8 @@
     $('#cancel-edit').hidden = true;
     $('#form-error').textContent = '';
     $('#form-warn').textContent = '';
+    $('#paste-status').textContent = '';
+    updatePreview();
     renderFormOptions();
   }
 
@@ -152,6 +267,8 @@
     $('#cancel-edit').hidden = false;
     $('#form-error').textContent = '';
     $('#form-warn').textContent = amazonLinkWarning(product.url);
+    $('#paste-status').textContent = '';
+    updatePreview();
     f.title.focus();
     $('#product-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -334,6 +451,8 @@
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+    const photos = Object.keys(pending).filter((path) => !uploaded.has(path) && state.products.some((p) => p.image === path)).length;
+    if (photos) toast(`${plural(photos, 'uploaded photo')} not included: photos are saved to the site only when you Publish.`, true);
   });
 
   $('#import').addEventListener('change', async (event) => {
@@ -362,8 +481,33 @@
   async function githubError(res) {
     let message = '';
     try { message = (await res.json()).message || ''; } catch { /* не JSON */ }
-    const hint = [401, 403, 404].includes(res.status) ? ' Check the repository name, branch and that the token has "Contents: Read and write" for this repo.' : '';
+    const hint = [401, 403, 404].includes(res.status)
+      ? ' Check the repository name, that the branch exists, and that the token has "Contents: Read and write" for this repo.' : '';
     return `GitHub ${res.status}: ${message || 'request failed'}.${hint}`;
+  }
+
+  // Один коммит на всё: store.json + новые фото (Git Data API). Vercel запускает одну сборку, а не N.
+  async function commitToGithub({ repo, branch, token, files, message }) {
+    const base = `https://api.github.com/repos/${repo}`;
+    const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+    const call = async (suffix, init = {}) => {
+      const res = await fetch(base + suffix, {
+        ...init,
+        headers: init.body ? { ...headers, 'Content-Type': 'application/json' } : headers,
+      });
+      if (!res.ok) throw new Error(await githubError(res));
+      return res.json();
+    };
+    const ref = branch.split('/').map(encodeURIComponent).join('/');
+    const headSha = (await call(`/git/ref/heads/${ref}`)).object.sha;
+    const headCommit = await call(`/git/commits/${headSha}`);
+    const entries = await Promise.all(files.map(async (file) => {
+      const blob = await call('/git/blobs', { method: 'POST', body: JSON.stringify({ content: file.base64, encoding: 'base64' }) });
+      return { path: file.path, mode: '100644', type: 'blob', sha: blob.sha };
+    }));
+    const tree = await call('/git/trees', { method: 'POST', body: JSON.stringify({ base_tree: headCommit.tree.sha, tree: entries }) });
+    const commit = await call('/git/commits', { method: 'POST', body: JSON.stringify({ message, tree: tree.sha, parents: [headSha] }) });
+    await call(`/git/refs/heads/${ref}`, { method: 'PATCH', body: JSON.stringify({ sha: commit.sha }) });
   }
 
   $('#publish-form').addEventListener('submit', async (event) => {
@@ -386,27 +530,25 @@
       if (f.remember.checked) localStorage.setItem(TOKEN_KEY, token); else localStorage.removeItem(TOKEN_KEY);
     } catch { /* ignore */ }
 
+    const files = [{ path, base64: toBase64(exportText()) }];
+    for (const [photoPath, dataUrl] of Object.entries(pending)) {
+      if (uploaded.has(photoPath) || !PHOTO_PATH.test(photoPath)) continue;
+      if (!state.products.some((p) => p.image === photoPath)) continue; // фото удалённого товара не отправляем
+      files.push({ path: photoPath, base64: dataUrl.split(',')[1] });
+    }
+
     const button = $('#publish-btn');
     button.disabled = true;
     button.textContent = 'Publishing…';
     try {
-      const api = `https://api.github.com/repos/${repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}`;
-      const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
-
-      let sha;
-      const current = await fetch(`${api}?ref=${encodeURIComponent(branch)}`, { headers });
-      if (current.ok) sha = (await current.json()).sha;
-      else if (current.status !== 404) throw new Error(await githubError(current));
-
-      const body = { message: 'Update store data (admin)', content: toBase64(exportText()), branch };
-      if (sha) body.sha = sha;
-      const res = await fetch(api, { method: 'PUT', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      if (!res.ok) throw new Error(await githubError(res));
-
+      await commitToGithub({ repo, branch, token, files, message: 'Update store data (admin)' });
+      files.slice(1).forEach((file) => uploaded.add(file.path));
       dirty = false;
       persist();
+      try { localStorage.removeItem(PENDING_KEY); } catch { /* ignore */ }
       renderStatus();
-      toast('Published. Vercel will redeploy in about a minute.');
+      const n = files.length - 1;
+      toast(`Published${n ? ` with ${plural(n, 'photo')}` : ''}. Vercel will redeploy in about a minute.`);
     } catch (err) {
       error.textContent = err.message || 'Could not publish.';
     } finally {
@@ -439,7 +581,7 @@
 
   $('#discard').addEventListener('click', () => {
     if (!window.confirm('Discard all unpublished changes made in this browser?')) return;
-    try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+    try { localStorage.removeItem(DRAFT_KEY); localStorage.removeItem(PENDING_KEY); } catch { /* ignore */ }
     location.reload();
   });
 
@@ -451,6 +593,13 @@
       const remembered = localStorage.getItem(TOKEN_KEY);
       f.token.value = remembered || sessionStorage.getItem(TOKEN_KEY) || '';
       f.remember.checked = Boolean(remembered);
+    } catch { /* ignore */ }
+
+    try {
+      const saved = JSON.parse(localStorage.getItem(PENDING_KEY) || '{}');
+      for (const [photoPath, dataUrl] of Object.entries(saved)) {
+        if (PHOTO_PATH.test(photoPath) && typeof dataUrl === 'string' && dataUrl.startsWith('data:image/')) pending[photoPath] = dataUrl;
+      }
     } catch { /* ignore */ }
 
     let draft = null;

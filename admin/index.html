@@ -40,12 +40,28 @@
         <div class="panel">
           <h2 id="form-title">Add product</h2>
           <form id="product-form" novalidate>
+            <label class="field paste">
+              <span>Paste from Amazon <em>(shortcut)</em></span>
+              <textarea id="paste" rows="2" placeholder="Paste an Amazon link or the SiteStripe code. The link, title and photo (when included) are filled in for you." spellcheck="false"></textarea>
+              <small id="paste-status" class="muted" aria-live="polite"></small>
+            </label>
+
             <label class="field"><span>Title</span><input name="title" maxlength="120" required></label>
             <label class="field"><span>Description</span><textarea name="description" rows="3" maxlength="400"></textarea></label>
-            <label class="field"><span>Image</span>
-              <input name="image" maxlength="500" placeholder="https://m.media-amazon.com/… or img/products/shirt.jpg">
-              <small>Use the image link from Amazon SiteStripe, or your own photo: upload it to <code>img/products/</code> in the repo and type that path.</small>
-            </label>
+
+            <div class="field">
+              <span id="photo-label">Photo</span>
+              <div class="photo" id="photo-drop">
+                <img id="preview" class="preview" alt="Photo preview" hidden>
+                <div class="photo__controls">
+                  <label class="btn btn--ghost btn--small" for="photo-file">Upload photo</label>
+                  <input id="photo-file" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+                  <input name="image" id="f-image" maxlength="500" placeholder="…or paste an image link" aria-labelledby="photo-label" autocomplete="off" spellcheck="false">
+                </div>
+              </div>
+              <small>Drop a file here or use the button. Photos are resized to 1200 px and saved to the site when you Publish. Upload only photos you own or have the right to use.</small>
+            </div>
+
             <label class="field"><span>Amazon link</span><input name="url" id="f-url" type="url" maxlength="800" placeholder="https://www.amazon.com/dp/…?tag=yourtag-20" required><small class="warn" id="form-warn"></small></label>
             <label class="field"><span>Shop category</span><select name="category" id="f-category"></select></label>
             <fieldset class="field">
@@ -99,7 +115,7 @@
       <div class="two-col">
         <div class="panel">
           <h2>Publish to the site</h2>
-          <p class="muted">Saves <code>data/store.json</code> to your GitHub repo. Vercel redeploys automatically, and the site updates in about a minute. Use a fine-grained token limited to this one repository with <strong>Contents: Read and write</strong>.</p>
+          <p class="muted">Saves <code>data/store.json</code> and any newly uploaded photos to your GitHub repo in a single commit. Vercel redeploys automatically, and the site updates in about a minute. Use a fine-grained token limited to this one repository with <strong>Contents: Read and write</strong>.</p>
           <form id="publish-form" novalidate>
             <label class="field"><span>Repository</span><input name="repo" placeholder="owner/repo" autocomplete="off" spellcheck="false"></label>
             <label class="field"><span>Branch</span><input name="branch" value="main" autocomplete="off" spellcheck="false"></label>
@@ -112,7 +128,7 @@
         </div>
         <div class="panel">
           <h2>Backup</h2>
-          <p class="muted">Download the data file to publish manually (replace <code>data/store.json</code> in the project and deploy), or import a file you saved earlier.</p>
+          <p class="muted">Download the data file to publish manually (replace <code>data/store.json</code> in the project and deploy; uploaded photos are only saved by Publish), or import a file you saved earlier.</p>
           <div class="actions">
             <button class="btn btn--ghost" id="download" type="button">Download store.json</button>
             <label class="btn btn--ghost" for="import">Import file…</label>

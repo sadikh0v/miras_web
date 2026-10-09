@@ -76,3 +76,11 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--oxblood); o
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0; pointer-events: none; max-width: calc(100vw - 32px); padding: 12px 22px; background: var(--green); color: var(--vellum); transition: opacity .25s var(--ease), transform .25s var(--ease); z-index: 50; }
 .toast.is-visible { opacity: 1; transform: translate(-50%, 0); }
 .toast.is-error { background: var(--oxblood); }
+
+/* photo block + paste */
+.paste em { font-style: italic; color: var(--brass-ink); }
+.photo { display: flex; gap: 14px; align-items: flex-start; padding: 12px; border: 1px dashed var(--line); background: var(--parchment); }
+.photo.is-over { border-color: var(--oxblood); background: #fff; }
+.photo__controls { display: grid; gap: 10px; flex: 1; min-width: 0; }
+.photo__controls .btn { justify-self: start; }
+.preview { width: 96px; flex: none; aspect-ratio: 4 / 5; object-fit: cover; border: 1px solid var(--line); background: #E6DCC6; }
