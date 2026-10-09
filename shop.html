@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' https: data:; connect-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'">
+  <title>Shop — Miras</title>
+  <meta name="description" content="Browse the Miras edit by category and collection. Every item links to Amazon.">
+  <meta name="theme-color" content="#17261F">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=Old+Standard+TT:ital,wght@0,400;0,700;1,400&display=swap">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="site-header__inner">
+      <a class="logo" href="index.html">Miras</a>
+      <nav class="nav" aria-label="Main navigation">
+        <a href="index.html">Home</a>
+        <a href="shop.html" aria-current="page">Shop</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="page-head">
+      <h1>Shop</h1>
+      <p class="notice">Every item links to Amazon. As an Amazon Associate I earn from qualifying purchases.</p>
+      <div class="filters" id="filters"></div>
+    </div>
+
+    <section class="section section--tight" aria-label="Products">
+      <div class="container">
+        <p class="count" id="count" aria-live="polite"></p>
+        <ul class="grid" id="grid"></ul>
+        <noscript><p class="state">Please enable JavaScript to see the products.</p></noscript>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <p class="disclosure"><strong>As an Amazon Associate I earn from qualifying purchases.</strong> Product links on this site are Amazon affiliate links: if you buy through them, we may earn a commission at no extra cost to you. Purchase, payment and delivery are handled by Amazon.</p>
+      <p class="copy">© <span data-year>2026</span> Miras</p>
+    </div>
+  </footer>
+
+  <script src="js/common.js" defer></script>
+  <script src="js/shop.js" defer></script>
+</body>
+</html>

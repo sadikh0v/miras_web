@@ -1,0 +1,23 @@
+{
+  "categories": [
+    { "id": "shirts", "name": "Shirts" },
+    { "id": "pants", "name": "Pants" },
+    { "id": "shoes", "name": "Shoes" },
+    { "id": "accessories", "name": "Accessories" }
+  ],
+  "collections": [
+    { "id": "season", "title": "Seasonal", "subtitle": "Picks for the weather right now", "productIds": ["p-linen-shirt", "p-chinos", "p-chelsea-boots", "p-scarf"] },
+    { "id": "top", "title": "Top Picks", "subtitle": "Our most recommended pieces", "productIds": ["p-oxford-shirt", "p-wool-trousers", "p-loafers", "p-scarf"] },
+    { "id": "new", "title": "New Arrivals", "subtitle": "Recently added to the edit", "productIds": ["p-belt", "p-loafers", "p-linen-shirt"] }
+  ],
+  "products": [
+    { "id": "p-oxford-shirt", "title": "Oxford Button-Down Shirt", "description": "Crisp cotton oxford with a classic button-down collar. Sample text — replace it with your own.", "image": "img/products/oxford-shirt.jpg", "url": "https://www.amazon.com/dp/ASIN_HERE?tag=YOUR_TAG-20", "categoryId": "shirts" },
+    { "id": "p-linen-shirt", "title": "Linen Short-Sleeve Shirt", "description": "Breathable washed linen for warm days. Sample text — replace it with your own.", "image": "img/products/linen-shirt.jpg", "url": "https://www.amazon.com/dp/ASIN_HERE?tag=YOUR_TAG-20", "categoryId": "shirts" },
+    { "id": "p-wool-trousers", "title": "Wool Trousers", "description": "Tailored mid-weight wool with a clean, straight leg. Sample text — replace it with your own.", "image": "img/products/wool-trousers.jpg", "url": "https://www.amazon.com/dp/ASIN_HERE?tag=YOUR_TAG-20", "categoryId": "pants" },
+    { "id": "p-chinos", "title": "Cotton Chinos", "description": "Everyday chinos in a soft, structured twill. Sample text — replace it with your own.", "image": "img/products/chinos.jpg", "url": "https://www.amazon.com/dp/ASIN_HERE?tag=YOUR_TAG-20", "categoryId": "pants" },
+    { "id": "p-loafers", "title": "Leather Loafers", "description": "Hand-finished leather with a flexible sole. Sample text — replace it with your own.", "image": "img/products/loafers.jpg", "url": "https://www.amazon.com/dp/ASIN_HERE?tag=YOUR_TAG-20", "categoryId": "shoes" },
+    { "id": "p-chelsea-boots", "title": "Suede Chelsea Boots", "description": "Soft suede upper, elastic side panels. Sample text — replace it with your own.", "image": "img/products/chelsea-boots.jpg", "url": "https://www.amazon.com/dp/ASIN_HERE?tag=YOUR_TAG-20", "categoryId": "shoes" },
+    { "id": "p-belt", "title": "Leather Belt", "description": "Full-grain leather with a brushed brass buckle. Sample text — replace it with your own.", "image": "img/products/belt.jpg", "url": "https://www.amazon.com/dp/ASIN_HERE?tag=YOUR_TAG-20", "categoryId": "accessories" },
+    { "id": "p-scarf", "title": "Cashmere Scarf", "description": "Lightweight cashmere in a neutral herringbone. Sample text — replace it with your own.", "image": "img/products/scarf.jpg", "url": "https://www.amazon.com/dp/ASIN_HERE?tag=YOUR_TAG-20", "categoryId": "accessories" }
+  ]
+}

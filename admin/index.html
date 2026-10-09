@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' https: data:; connect-src 'self' https://api.github.com; base-uri 'self'; form-action 'self'; object-src 'none'">
+  <title>Admin — Miras</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=Old+Standard+TT:ital,wght@0,400;0,700;1,400&display=swap">
+  <link rel="stylesheet" href="../css/styles.css">
+  <link rel="stylesheet" href="../css/admin.css">
+</head>
+<body class="admin">
+  <header class="admin-bar">
+    <div class="admin-bar__inner">
+      <span class="logo">Miras <span class="muted-light">admin</span></span>
+      <span class="status" id="status" role="status"></span>
+      <a class="btn btn--ghost btn--small" href="../index.html" target="_blank" rel="noopener">View site</a>
+    </div>
+  </header>
+
+  <div class="banner" id="draft-banner" hidden>
+    You are working on a draft saved in this browser.
+    <button class="link" id="discard" type="button">Discard draft and reload live data</button>
+  </div>
+
+  <nav class="tabs" aria-label="Admin sections">
+    <button type="button" data-tab="products" aria-selected="true">Products</button>
+    <button type="button" data-tab="collections" aria-selected="false">Home collections</button>
+    <button type="button" data-tab="categories" aria-selected="false">Shop categories</button>
+    <button type="button" data-tab="publish" aria-selected="false">Publish</button>
+  </nav>
+
+  <main class="admin-main">
+    <!-- PRODUCTS -->
+    <section class="tab" id="tab-products">
+      <div class="two-col">
+        <div class="panel">
+          <h2 id="form-title">Add product</h2>
+          <form id="product-form" novalidate>
+            <label class="field"><span>Title</span><input name="title" maxlength="120" required></label>
+            <label class="field"><span>Description</span><textarea name="description" rows="3" maxlength="400"></textarea></label>
+            <label class="field"><span>Image</span>
+              <input name="image" maxlength="500" placeholder="https://m.media-amazon.com/… or img/products/shirt.jpg">
+              <small>Use the image link from Amazon SiteStripe, or your own photo: upload it to <code>img/products/</code> in the repo and type that path.</small>
+            </label>
+            <label class="field"><span>Amazon link</span><input name="url" id="f-url" type="url" maxlength="800" placeholder="https://www.amazon.com/dp/…?tag=yourtag-20" required><small class="warn" id="form-warn"></small></label>
+            <label class="field"><span>Shop category</span><select name="category" id="f-category"></select></label>
+            <fieldset class="field">
+              <legend>Show in home collections</legend>
+              <div id="form-cols"></div>
+            </fieldset>
+            <p class="form-error" id="form-error" role="alert"></p>
+            <div class="actions">
+              <button class="btn" type="submit">Save product</button>
+              <button class="btn btn--ghost" id="cancel-edit" type="button" hidden>Cancel</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="panel">
+          <h2>All products <span class="muted" id="count"></span></h2>
+          <input class="search" id="search" type="search" placeholder="Search products" aria-label="Search products">
+          <ul class="plist" id="product-list"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- HOME COLLECTIONS -->
+    <section class="tab" id="tab-collections" hidden>
+      <div class="panel">
+        <h2>Home page collections</h2>
+        <p class="muted">Each collection is a row on the home page (first 4 products, in the order below) and a filter in the shop. Open a collection to add, remove and reorder its products.</p>
+        <div id="collections"></div>
+        <form class="inline-form" id="add-collection">
+          <input name="title" maxlength="60" placeholder="New collection, e.g. Winter Edit" aria-label="New collection name" required>
+          <button class="btn btn--small" type="submit">Add collection</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- SHOP CATEGORIES -->
+    <section class="tab" id="tab-categories" hidden>
+      <div class="panel">
+        <h2>Shop categories</h2>
+        <p class="muted">Product types used as filters in the shop (Shirts, Pants, Shoes…). The order here is the order of the filter buttons.</p>
+        <ul class="rows" id="categories"></ul>
+        <form class="inline-form" id="add-category">
+          <input name="name" maxlength="60" placeholder="New category, e.g. Jackets" aria-label="New category name" required>
+          <button class="btn btn--small" type="submit">Add category</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- PUBLISH -->
+    <section class="tab" id="tab-publish" hidden>
+      <div class="two-col">
+        <div class="panel">
+          <h2>Publish to the site</h2>
+          <p class="muted">Saves <code>data/store.json</code> to your GitHub repo. Vercel redeploys automatically, and the site updates in about a minute. Use a fine-grained token limited to this one repository with <strong>Contents: Read and write</strong>.</p>
+          <form id="publish-form" novalidate>
+            <label class="field"><span>Repository</span><input name="repo" placeholder="owner/repo" autocomplete="off" spellcheck="false"></label>
+            <label class="field"><span>Branch</span><input name="branch" value="main" autocomplete="off" spellcheck="false"></label>
+            <label class="field"><span>Data file path</span><input name="path" value="data/store.json" autocomplete="off" spellcheck="false"></label>
+            <label class="field"><span>GitHub token</span><input name="token" type="password" autocomplete="off" spellcheck="false"></label>
+            <label class="check"><input type="checkbox" name="remember"> Remember the token on this device</label>
+            <p class="form-error" id="publish-error" role="alert"></p>
+            <button class="btn" id="publish-btn" type="submit">Publish now</button>
+          </form>
+        </div>
+        <div class="panel">
+          <h2>Backup</h2>
+          <p class="muted">Download the data file to publish manually (replace <code>data/store.json</code> in the project and deploy), or import a file you saved earlier.</p>
+          <div class="actions">
+            <button class="btn btn--ghost" id="download" type="button">Download store.json</button>
+            <label class="btn btn--ghost" for="import">Import file…</label>
+            <input id="import" type="file" accept="application/json,.json" hidden>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="../js/common.js" defer></script>
+  <script src="../js/admin.js" defer></script>
+</body>
+</html>
