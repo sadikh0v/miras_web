@@ -1,23 +1,145 @@
 'use strict';
 
 (() => {
-  const { normalizeStore, loadStore, httpsUrl, imageSrc } = window.Miras;
+  const { normalizeStore, httpsUrl, imageSrc } = window.Miras;
   const $ = (selector) => document.querySelector(selector);
+  const cfg = window.MIRAS_CONFIG || {};
 
-  const DRAFT_KEY = 'miras.admin.draft.v1';
-  const CFG_KEY = 'miras.admin.github.v1';
-  const TOKEN_KEY = 'miras.admin.token.v1';
-  const PENDING_KEY = 'miras.admin.photos.v1';
+  const SESSION_KEY = 'miras.admin.session.v1';
   const MAX_SIDE = 1200;
-  const PHOTO_PATH = /^img\/products\/[\w.-]+\.(webp|jpg)$/;
+  const SAVE_DELAY = 700;
 
+  class AuthError extends Error {}
+
+  /* ======================================================================
+     Supabase: обычный fetch, без SDK и сторонних скриптов.
+     Права держатся на RLS из supabase/setup.sql: менять данные может только вошедший пользователь.
+     ====================================================================== */
+  const SB = (() => {
+    const url = String(cfg.supabaseUrl || '').replace(/\/+$/, '');
+    const key = String(cfg.supabaseKey || '');
+    const configured = /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(url) && key.length > 20 && !/YOUR/i.test(url + key);
+    const PUBLIC_PREFIX = `${url}/storage/v1/object/public/products/`;
+    let session = null;
+    let refreshing = null;
+
+    const rid = () => Math.random().toString(36).slice(2, 8);
+    const request = (path, init = {}, token) => fetch(url + path, {
+      ...init,
+      headers: { apikey: key, ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init.headers || {}) },
+    });
+
+    function setSession(data) {
+      session = data ? {
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+        expires_at: data.expires_at || Math.floor(Date.now() / 1000) + (data.expires_in || 3600),
+      } : null;
+      try {
+        if (session) localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+        else localStorage.removeItem(SESSION_KEY);
+      } catch { /* приватный режим */ }
+    }
+
+    function restore() {
+      try { session = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch { session = null; }
+      if (!session || !session.refresh_token) session = null;
+    }
+
+    // Refresh-токен одноразовый: параллельные обновления склеиваем в одно.
+    function refresh() {
+      if (!session || !session.refresh_token) return Promise.reject(new AuthError('Please sign in again.'));
+      refreshing ??= (async () => {
+        const res = await request('/auth/v1/token?grant_type=refresh_token', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: session.refresh_token }),
+        });
+        if (!res.ok) { setSession(null); throw new AuthError('Your session expired. Please sign in again.'); }
+        setSession(await res.json());
+      })().finally(() => { refreshing = null; });
+      return refreshing;
+    }
+
+    async function call(path, init = {}) {
+      if (!session) throw new AuthError('Please sign in.');
+      if (session.expires_at - Date.now() / 1000 < 60) await refresh();
+      let res = await request(path, init, session.access_token);
+      if (res.status === 401) {
+        await refresh();
+        res = await request(path, init, session.access_token);
+      }
+      return res;
+    }
+
+    async function signIn(email, password) {
+      const res = await request('/auth/v1/token?grant_type=password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }),
+      });
+      if (res.status === 429) throw new Error('Too many attempts. Wait a minute and try again.');
+      if (!res.ok) throw new Error(res.status === 400 || res.status === 401 ? 'Wrong email or password.' : 'Sign-in failed. Try again in a minute.');
+      setSession(await res.json());
+    }
+
+    async function signOut() {
+      try { if (session) await request('/auth/v1/logout', { method: 'POST' }, session.access_token); } catch { /* ignore */ }
+      setSession(null);
+    }
+
+    async function loadStore() {
+      const res = await call('/rest/v1/store?id=eq.1&select=data,rev', { headers: { Accept: 'application/json' } });
+      if (!res.ok) throw new Error(`Could not load the store (${res.status}).`);
+      const rows = await res.json();
+      if (!rows[0]) throw new Error('The store table is empty. Run supabase/setup.sql first.');
+      return rows[0];
+    }
+
+    // Запись только если rev не изменился: правка с другого устройства не будет молча затёрта.
+    async function saveStore(data, rev) {
+      const res = await call(`/rest/v1/store?id=eq.1&rev=eq.${Number(rev)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
+        body: JSON.stringify({ data, rev: Number(rev) + 1 }),
+      });
+      if (!res.ok) throw new Error(`Could not save (${res.status}).`);
+      const rows = await res.json();
+      if (!rows.length) { const err = new Error('conflict'); err.code = 'conflict'; throw err; }
+      return rows[0].rev;
+    }
+
+    async function uploadPhoto(blob) {
+      const name = `${Date.now().toString(36)}-${rid()}.${blob.type === 'image/webp' ? 'webp' : 'jpg'}`;
+      const res = await call(`/storage/v1/object/products/${name}`, {
+        method: 'POST',
+        headers: { 'Content-Type': blob.type, 'x-upsert': 'false', 'cache-control': 'max-age=31536000' },
+        body: blob,
+      });
+      if (!res.ok) throw new Error(`Upload failed (${res.status}).`);
+      return PUBLIC_PREFIX + name;
+    }
+
+    async function deletePhoto(photoUrl) {
+      if (!String(photoUrl).startsWith(PUBLIC_PREFIX)) return; // чужие ссылки (Amazon и т.п.) не трогаем
+      const name = photoUrl.slice(PUBLIC_PREFIX.length);
+      if (!/^[\w.-]+$/.test(name)) return;
+      try { await call(`/storage/v1/object/products/${name}`, { method: 'DELETE' }); } catch { /* не критично */ }
+    }
+
+    return { configured, restore, signedIn: () => Boolean(session), signIn, signOut, loadStore, saveStore, uploadPhoto, deletePhoto };
+  })();
+
+  /* ---------- state ---------- */
   let state = { categories: [], collections: [], products: [] };
-  let dirty = false;
+  let rev = 0;
+  let saveState = 'saved';
+  let saveTimer = null;
+  let saving = false;
+  let saveQueued = false;
+  let changeId = 0;
+  let conflict = false;
   let editingId = null;
   let formCols = new Set();
   const openCols = new Set();
-  let pending = {};          // path -> dataURL: загруженные фото, которые уйдут в репозиторий при Publish
-  const uploaded = new Set(); // уже опубликованные в этой сессии (повторно не отправляем)
+  const unsavedUploads = new Set(); // фото, загруженные в форме, но ещё не сохранённые в товаре
+  const trash = new Set();          // фото удалённых/замещённых товаров: удаляем после успешного сохранения
   let toastTimer;
 
   /* ---------- helpers ---------- */
@@ -64,7 +186,7 @@
 
   function thumb(product) {
     const img = h('img', { alt: '', loading: 'lazy', width: '56', height: '70' });
-    img.src = pending[product.image] || imageSrc(product.image, '../') || '../img/placeholder.svg';
+    img.src = imageSrc(product.image, '../') || '../img/placeholder.svg';
     img.addEventListener('error', () => { img.src = '../img/placeholder.svg'; }, { once: true });
     return img;
   }
@@ -82,14 +204,66 @@
     return '';
   }
 
-  /* ---------- photos & Amazon paste ---------- */
-  function persistPending() {
-    const keep = Object.fromEntries(Object.entries(pending).filter(([path]) => !uploaded.has(path)));
-    try { localStorage.setItem(PENDING_KEY, JSON.stringify(keep)); } catch {
-      toast('Browser storage is full: publish soon, otherwise this photo is lost on reload.', true);
+  /* ---------- auto-save ---------- */
+  const STATUS = {
+    saved: 'All changes saved. Live now.',
+    pending: 'Unsaved changes…',
+    saving: 'Saving…',
+    error: 'Not saved. Click to retry.',
+    conflict: 'Not saved. Reload needed.',
+  };
+
+  function setStatus(kind) {
+    saveState = kind;
+    const node = $('#status');
+    node.textContent = STATUS[kind];
+    node.dataset.state = kind;
+  }
+
+  function flushTrash() {
+    for (const photoUrl of [...trash]) {
+      trash.delete(photoUrl);
+      if (!state.products.some((p) => p.image === photoUrl)) SB.deletePhoto(photoUrl);
     }
   }
 
+  function commit() {
+    changeId += 1;
+    renderAll();
+    if (conflict) return;
+    setStatus('pending');
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(save, SAVE_DELAY);
+  }
+
+  async function save() {
+    clearTimeout(saveTimer);
+    if (conflict) return;
+    if (saving) { saveQueued = true; return; }
+    saving = true;
+    const startedAt = changeId;
+    setStatus('saving');
+    try {
+      rev = await SB.saveStore(state, rev);
+      setStatus(startedAt === changeId ? 'saved' : 'pending');
+      flushTrash();
+    } catch (err) {
+      if (err instanceof AuthError) { signedOut(err.message); }
+      else if (err.code === 'conflict') { conflict = true; setStatus('conflict'); $('#conflict').hidden = false; }
+      else { setStatus('error'); toast(err.message || 'Could not save.', true); }
+    } finally {
+      saving = false;
+      if (saveQueued) { saveQueued = false; save(); }
+    }
+  }
+
+  $('#status').addEventListener('click', () => { if (saveState === 'error') save(); });
+  $('#reload').addEventListener('click', () => window.location.reload());
+  window.addEventListener('beforeunload', (e) => {
+    if (['pending', 'saving', 'error'].includes(saveState)) { e.preventDefault(); e.returnValue = ''; }
+  });
+
+  /* ---------- photos & Amazon paste ---------- */
   // Фото уменьшается до 1200 px и перекодируется в WebP: сайт остаётся быстрым, EXIF/GPS стираются.
   async function compressImage(file) {
     const bitmap = await createImageBitmap(file);
@@ -102,33 +276,42 @@
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     if (bitmap.close) bitmap.close();
-    let url = canvas.toDataURL('image/webp', 0.86);
-    if (!url.startsWith('data:image/webp')) url = canvas.toDataURL('image/jpeg', 0.88); // Safari без WebP-энкодера
-    return url;
+    const toBlob = (type, quality) => new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+    let blob = await toBlob('image/webp', 0.86);
+    if (!blob || blob.type !== 'image/webp') blob = await toBlob('image/jpeg', 0.88); // Safari без WebP-энкодера
+    if (!blob) throw new Error('Could not encode the image.');
+    return blob;
   }
 
   function updatePreview() {
-    const value = $('#f-image').value.trim();
-    const src = pending[value] || imageSrc(value, '../');
+    const src = imageSrc($('#f-image').value.trim(), '../');
     const img = $('#preview');
     if (!src) { img.hidden = true; img.removeAttribute('src'); return; }
     img.hidden = false;
     img.src = src;
   }
 
+  function discardUnsavedUploads(keep = '') {
+    for (const photoUrl of unsavedUploads) if (photoUrl !== keep) SB.deletePhoto(photoUrl);
+    unsavedUploads.clear();
+  }
+
   async function handlePhoto(file) {
     if (!file) return;
     if (!/^image\/(jpeg|png|webp)$/.test(file.type)) { toast('Please choose a JPEG, PNG or WebP photo.', true); return; }
+    const status = $('#photo-status');
+    status.textContent = 'Uploading…';
     try {
-      const dataUrl = await compressImage(file);
-      const ext = dataUrl.startsWith('data:image/webp') ? 'webp' : 'jpg';
-      const path = `img/products/${Date.now().toString(36)}-${rid()}.${ext}`;
-      pending[path] = dataUrl;
-      persistPending();
-      $('#f-image').value = path;
+      const photoUrl = await SB.uploadPhoto(await compressImage(file));
+      discardUnsavedUploads(); // предыдущее несохранённое фото из этой формы больше не нужно
+      unsavedUploads.add(photoUrl);
+      $('#f-image').value = photoUrl;
       updatePreview();
-    } catch {
-      toast('Could not read this image.', true);
+      status.textContent = 'Photo uploaded.';
+    } catch (err) {
+      status.textContent = '';
+      if (err instanceof AuthError) signedOut(err.message);
+      else toast(`Could not upload the photo. ${err.message || ''}`.trim(), true);
     }
   }
 
@@ -187,19 +370,8 @@
   const dropZone = $('#photo-drop');
   dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('is-over'); });
   dropZone.addEventListener('dragleave', () => dropZone.classList.remove('is-over'));
-  dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.classList.remove('is-over'); handlePhoto(e.dataTransfer?.files?.[0]); });
+  dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.classList.remove('is-over'); handlePhoto(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]); });
   $('#preview').addEventListener('error', () => { $('#preview').hidden = true; });
-
-  /* ---------- state ---------- */
-  function persist() {
-    try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ data: state, dirty })); } catch { /* приватный режим */ }
-  }
-
-  function commit() {
-    dirty = true;
-    persist();
-    renderAll();
-  }
 
   /* ---------- products ---------- */
   function renderFormOptions() {
@@ -241,6 +413,7 @@
   }
 
   function resetForm() {
+    discardUnsavedUploads();
     editingId = null;
     formCols = new Set();
     $('#product-form').reset();
@@ -254,6 +427,7 @@
   }
 
   function startEdit(product) {
+    discardUnsavedUploads();
     editingId = product.id;
     const f = $('#product-form').elements;
     f.title.value = product.title;
@@ -277,6 +451,7 @@
     if (!window.confirm(`Delete "${product.title}"? It will also be removed from all collections.`)) return;
     state.products = state.products.filter((p) => p.id !== product.id);
     state.collections.forEach((c) => { c.productIds = c.productIds.filter((id) => id !== product.id); });
+    if (product.image) trash.add(product.image);
     if (editingId === product.id) resetForm();
     commit();
     toast('Product deleted');
@@ -293,13 +468,14 @@
 
     if (!title || title.length > 120) { error.textContent = 'Title is required (up to 120 characters).'; return; }
     if (description.length > 400) { error.textContent = 'Description is too long (up to 400 characters).'; return; }
-    if (image && !imageSrc(image)) { error.textContent = 'Image must be an https:// link or a path such as img/products/shirt.jpg.'; return; }
+    if (image && !imageSrc(image)) { error.textContent = 'Photo must be an uploaded file or an https:// image link.'; return; }
     if (!httpsUrl(url)) { error.textContent = 'Amazon link must be a full https:// address.'; return; }
     error.textContent = '';
 
     let product;
     if (editingId) {
       product = findById(state.products, editingId);
+      if (product.image && product.image !== image) trash.add(product.image); // старое фото удалим после сохранения
       Object.assign(product, { title, description, image, url, categoryId: f.category.value });
     } else {
       product = { id: makeId(`p-${rid()}`, state.products), title, description, image, url, categoryId: f.category.value };
@@ -311,6 +487,8 @@
       if (want && !has) col.productIds.push(product.id);
       if (!want && has) col.productIds = col.productIds.filter((id) => id !== product.id);
     }
+    discardUnsavedUploads(image);
+    unsavedUploads.clear();
     resetForm();
     commit();
     toast('Product saved');
@@ -441,18 +619,14 @@
     toast('Category added');
   });
 
-  /* ---------- publish / backup ---------- */
-  const exportText = () => `${JSON.stringify(state, null, 2)}\n`;
-
+  /* ---------- backup ---------- */
   $('#download').addEventListener('click', () => {
-    const url = URL.createObjectURL(new Blob([exportText()], { type: 'application/json' }));
+    const url = URL.createObjectURL(new Blob([`${JSON.stringify(state, null, 2)}\n`], { type: 'application/json' }));
     const a = h('a', { href: url, download: 'store.json' });
     document.body.append(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    const photos = Object.keys(pending).filter((path) => !uploaded.has(path) && state.products.some((p) => p.image === path)).length;
-    if (photos) toast(`${plural(photos, 'uploaded photo')} not included: photos are saved to the site only when you Publish.`, true);
   });
 
   $('#import').addEventListener('change', async (event) => {
@@ -461,7 +635,7 @@
     if (!file) return;
     try {
       const imported = normalizeStore(JSON.parse(await file.text()));
-      if (!window.confirm(`Replace the current data with this file (${plural(imported.products.length, 'product')})?`)) return;
+      if (!window.confirm(`Replace ALL current data with this file (${plural(imported.products.length, 'product')})? This goes live immediately.`)) return;
       state = imported;
       resetForm();
       commit();
@@ -471,105 +645,12 @@
     }
   });
 
-  const toBase64 = (text) => {
-    const bytes = new TextEncoder().encode(text);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-    return btoa(binary);
-  };
-
-  async function githubError(res) {
-    let message = '';
-    try { message = (await res.json()).message || ''; } catch { /* не JSON */ }
-    const hint = [401, 403, 404].includes(res.status)
-      ? ' Check the repository name, that the branch exists, and that the token has "Contents: Read and write" for this repo.' : '';
-    return `GitHub ${res.status}: ${message || 'request failed'}.${hint}`;
-  }
-
-  // Один коммит на всё: store.json + новые фото (Git Data API). Vercel запускает одну сборку, а не N.
-  async function commitToGithub({ repo, branch, token, files, message }) {
-    const base = `https://api.github.com/repos/${repo}`;
-    const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
-    const call = async (suffix, init = {}) => {
-      const res = await fetch(base + suffix, {
-        ...init,
-        headers: init.body ? { ...headers, 'Content-Type': 'application/json' } : headers,
-      });
-      if (!res.ok) throw new Error(await githubError(res));
-      return res.json();
-    };
-    const ref = branch.split('/').map(encodeURIComponent).join('/');
-    const headSha = (await call(`/git/ref/heads/${ref}`)).object.sha;
-    const headCommit = await call(`/git/commits/${headSha}`);
-    const entries = await Promise.all(files.map(async (file) => {
-      const blob = await call('/git/blobs', { method: 'POST', body: JSON.stringify({ content: file.base64, encoding: 'base64' }) });
-      return { path: file.path, mode: '100644', type: 'blob', sha: blob.sha };
-    }));
-    const tree = await call('/git/trees', { method: 'POST', body: JSON.stringify({ base_tree: headCommit.tree.sha, tree: entries }) });
-    const commit = await call('/git/commits', { method: 'POST', body: JSON.stringify({ message, tree: tree.sha, parents: [headSha] }) });
-    await call(`/git/refs/heads/${ref}`, { method: 'PATCH', body: JSON.stringify({ sha: commit.sha }) });
-  }
-
-  $('#publish-form').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const f = event.target.elements;
-    const error = $('#publish-error');
-    const repo = f.repo.value.trim();
-    const branch = f.branch.value.trim() || 'main';
-    const path = f.path.value.trim().replace(/^\/+/, '') || 'data/store.json';
-    const token = f.token.value.trim();
-
-    if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) { error.textContent = 'Repository must look like owner/repo.'; return; }
-    if (!token) { error.textContent = 'Paste a GitHub token.'; return; }
-    if (path.split('/').includes('..')) { error.textContent = 'Invalid file path.'; return; }
-    error.textContent = '';
-
-    try { localStorage.setItem(CFG_KEY, JSON.stringify({ repo, branch, path })); } catch { /* ignore */ }
-    try {
-      sessionStorage.setItem(TOKEN_KEY, token);
-      if (f.remember.checked) localStorage.setItem(TOKEN_KEY, token); else localStorage.removeItem(TOKEN_KEY);
-    } catch { /* ignore */ }
-
-    const files = [{ path, base64: toBase64(exportText()) }];
-    for (const [photoPath, dataUrl] of Object.entries(pending)) {
-      if (uploaded.has(photoPath) || !PHOTO_PATH.test(photoPath)) continue;
-      if (!state.products.some((p) => p.image === photoPath)) continue; // фото удалённого товара не отправляем
-      files.push({ path: photoPath, base64: dataUrl.split(',')[1] });
-    }
-
-    const button = $('#publish-btn');
-    button.disabled = true;
-    button.textContent = 'Publishing…';
-    try {
-      await commitToGithub({ repo, branch, token, files, message: 'Update store data (admin)' });
-      files.slice(1).forEach((file) => uploaded.add(file.path));
-      dirty = false;
-      persist();
-      try { localStorage.removeItem(PENDING_KEY); } catch { /* ignore */ }
-      renderStatus();
-      const n = files.length - 1;
-      toast(`Published${n ? ` with ${plural(n, 'photo')}` : ''}. Vercel will redeploy in about a minute.`);
-    } catch (err) {
-      error.textContent = err.message || 'Could not publish.';
-    } finally {
-      button.disabled = false;
-      button.textContent = 'Publish now';
-    }
-  });
-
   /* ---------- chrome ---------- */
-  function renderStatus() {
-    const node = $('#status');
-    node.textContent = dirty ? 'Unpublished changes' : 'Everything is published';
-    node.classList.toggle('is-dirty', dirty);
-  }
-
   function renderAll() {
     renderFormOptions();
     renderProducts();
     renderCollections();
     renderCategories();
-    renderStatus();
   }
 
   document.querySelectorAll('.tabs button').forEach((button) => {
@@ -579,46 +660,69 @@
     });
   });
 
-  $('#discard').addEventListener('click', () => {
-    if (!window.confirm('Discard all unpublished changes made in this browser?')) return;
-    try { localStorage.removeItem(DRAFT_KEY); localStorage.removeItem(PENDING_KEY); } catch { /* ignore */ }
-    location.reload();
+  /* ---------- sign in / out ---------- */
+  function showLogin(message = '') {
+    $('#app-view').hidden = true;
+    $('#login-view').hidden = false;
+    $('#login-error').textContent = message;
+  }
+
+  function signedOut(message) {
+    clearTimeout(saveTimer);
+    state = { categories: [], collections: [], products: [] };
+    showLogin(message || 'Please sign in.');
+  }
+
+  async function enterApp() {
+    const row = await SB.loadStore();
+    state = normalizeStore(row.data);
+    rev = row.rev;
+    conflict = false;
+    saving = false;
+    saveQueued = false;
+    $('#conflict').hidden = true;
+    $('#login-view').hidden = true;
+    $('#app-view').hidden = false;
+    setStatus('saved');
+    renderAll();
+  }
+
+  $('#login-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const f = event.target.elements;
+    const error = $('#login-error');
+    error.textContent = '';
+    if (!f.email.value.trim() || !f.password.value) { error.textContent = 'Enter your email and password.'; return; }
+    try {
+      await SB.signIn(f.email.value.trim(), f.password.value);
+      f.password.value = '';
+      await enterApp();
+    } catch (err) {
+      error.textContent = err.message;
+    }
+  });
+
+  $('#logout').addEventListener('click', async () => {
+    if (['pending', 'saving', 'error'].includes(saveState) && !window.confirm('Some changes are not saved yet. Sign out anyway?')) return;
+    await SB.signOut();
+    resetForm();
+    signedOut('Signed out.');
   });
 
   async function init() {
-    try {
-      const cfg = JSON.parse(localStorage.getItem(CFG_KEY) || 'null');
-      const f = $('#publish-form').elements;
-      if (cfg) { f.repo.value = cfg.repo || ''; f.branch.value = cfg.branch || 'main'; f.path.value = cfg.path || 'data/store.json'; }
-      const remembered = localStorage.getItem(TOKEN_KEY);
-      f.token.value = remembered || sessionStorage.getItem(TOKEN_KEY) || '';
-      f.remember.checked = Boolean(remembered);
-    } catch { /* ignore */ }
-
-    try {
-      const saved = JSON.parse(localStorage.getItem(PENDING_KEY) || '{}');
-      for (const [photoPath, dataUrl] of Object.entries(saved)) {
-        if (PHOTO_PATH.test(photoPath) && typeof dataUrl === 'string' && dataUrl.startsWith('data:image/')) pending[photoPath] = dataUrl;
-      }
-    } catch { /* ignore */ }
-
-    let draft = null;
-    try { draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch { /* битый черновик */ }
-
-    if (draft && draft.dirty && draft.data) {
-      state = normalizeStore(draft.data);
-      dirty = true;
-      $('#draft-banner').hidden = false;
-    } else {
-      try {
-        state = await loadStore('../data/store.json');
-      } catch (err) {
-        console.error(err);
-        state = normalizeStore({});
-        toast('Could not load data/store.json. Starting with an empty store.', true);
+    if (!SB.configured) {
+      showLogin('Fill in js/config.js with your Supabase project URL and key first.');
+      $('#login-form').querySelector('button').disabled = true;
+      return;
+    }
+    SB.restore();
+    if (SB.signedIn()) {
+      try { await enterApp(); return; } catch (err) {
+        showLogin(err.message); // AuthError: «сессия истекла»; иначе — текст ошибки загрузки
+        return;
       }
     }
-    renderAll();
+    showLogin();
   }
 
   init();

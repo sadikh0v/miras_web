@@ -78,9 +78,34 @@ window.Miras = (() => {
     return { categories, collections, products };
   }
 
-  async function loadStore(url) {
-    const res = await fetch(url, { cache: 'no-cache' });
-    if (!res.ok) throw new Error(`Could not load ${url} (${res.status})`);
+  // Публичное чтение из Supabase (ключ публичный, права ограничены RLS). Если Supabase недоступен
+  // или не настроен — показываем сохранённую копию data/store.json, чтобы сайт не оставался пустым.
+  const cfg = window.MIRAS_CONFIG || {};
+  const remoteReady = /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(cfg.supabaseUrl || '')
+    && typeof cfg.supabaseKey === 'string' && cfg.supabaseKey.length > 20
+    && !/YOUR/i.test(`${cfg.supabaseUrl}${cfg.supabaseKey}`);
+
+  async function fetchWithTimeout(url, init, ms) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms);
+    try { return await fetch(url, { ...init, signal: ctrl.signal }); } finally { clearTimeout(timer); }
+  }
+
+  async function loadStore(fallbackUrl) {
+    if (remoteReady) {
+      try {
+        const res = await fetchWithTimeout(`${cfg.supabaseUrl}/rest/v1/store?id=eq.1&select=data`,
+          { headers: { apikey: cfg.supabaseKey, Accept: 'application/json' }, cache: 'no-store' }, 6000);
+        if (res.ok) {
+          const rows = await res.json();
+          if (rows[0] && rows[0].data) return normalizeStore(rows[0].data);
+        }
+      } catch (err) {
+        console.warn('Supabase is unavailable, using the saved copy.', err);
+      }
+    }
+    const res = await fetch(fallbackUrl, { cache: 'no-cache' });
+    if (!res.ok) throw new Error(`Could not load ${fallbackUrl} (${res.status})`);
     return normalizeStore(await res.json());
   }
 
@@ -119,5 +144,5 @@ window.Miras = (() => {
 
   document.querySelectorAll('[data-year]').forEach((n) => { n.textContent = new Date().getFullYear(); });
 
-  return { el, str, httpsUrl, imageSrc, normalizeStore, loadStore, card };
+  return { el, str, httpsUrl, imageSrc, normalizeStore, loadStore, card, remoteReady };
 })();

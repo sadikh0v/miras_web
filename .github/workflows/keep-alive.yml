@@ -1,0 +1,13 @@
+# Необязательно. Бесплатный проект Supabase засыпает после недели без запросов;
+# этот пинг раз в 3 дня не даёт ему уснуть, даже если на сайт никто не заходит.
+# Repo → Settings → Secrets and variables → Actions: добавить SUPABASE_URL и SUPABASE_KEY.
+name: supabase-keep-alive
+on:
+  schedule:
+    - cron: '17 6 */3 * *'
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -fsS "${{ secrets.SUPABASE_URL }}/rest/v1/store?id=eq.1&select=rev" -H "apikey: ${{ secrets.SUPABASE_KEY }}"
